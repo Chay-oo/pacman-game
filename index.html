@@ -1,0 +1,350 @@
+<title>Pac-Man Game</title> <script type="text/javascript" src="https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js"></script> <style> body { background-color: #000; color: #fff; font-family: Arial, sans-serif; text-align: center; margin: 0; padding: 20px; } h1 { font-size: 2em; margin-bottom: 10px; } #instructions { max-width: 600px; margin: 0 auto 20px; text-align: left; } canvas { border: 2px solid #fff; margin: 0 auto; display: block; } </style>
+Pac-Man Game
+How to Play:
+
+Use arrow keys to move Pac-Man.
+Eat all dots (+10 points) and Super Pellets (+50 points) to win.
+Tunnel: Exit left or right at row 15 to wrap to the opposite side.
+Super Pellets: Make ghosts edible (blue) for 5 seconds (+200 points if eaten).
+Avoid ghosts (red, pink, cyan, orange) or lose a life (4 lives total).
+Sounds: Hear "waka-waka" for dots, power-up for Super Pellets, and game-over tone.
+Press Q to quit after winning or losing.
+<canvas id="pygame" width="560" height="620"></canvas> <script type="text/javascript"> async function main() { let pyodide = await loadPyodide(); await pyodide.loadPackage("pygame"); await pyodide.runPythonAsync(` import pygame import asyncio import platform import random import math import numpy as np import pygame.sndarray
+Initialize Pygame
+pygame.init()
+
+Screen settings
+CELL_SIZE = 20
+MAZE_WIDTH = 28
+MAZE_HEIGHT = 31
+SCREEN_WIDTH = MAZE_WIDTH * CELL_SIZE
+SCREEN_HEIGHT = MAZE_HEIGHT * CELL_SIZE
+screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+pygame.display.set_caption("Pac-Man")
+
+Colors
+BLACK = (0, 0, 0)
+BLUE = (0, 0, 255)
+YELLOW = (255, 255, 0)
+WHITE = (255, 255, 255)
+RED = (255, 0, 0)
+PINK = (255, 105, 180)
+CYAN = (0, 255, 255)
+ORANGE = (255, 165, 0)
+BLUE_FRIGHTENED = (0, 0, 139)
+
+Maze
+maze = [
+"############################",
+"#...........##...........#",
+"######.#####.##.#####.######.#",
+"#.####.#####.##.#####.####.#",
+"#.####.#####.##.#####.####.#",
+"#..........................#",
+"#.####.##.########.##.####.#",
+"#.####.##.########.##.####.#",
+"......##....##....##......#",
+"######.#####.##.#####.######",
+"######.#####.##.#####.######",
+"#............##............#",
+"#.####.#####.##.#####.####.#",
+"#.####.#####.##.#####.####.#",
+"######.##..........##.######",
+"  .......#.###GG###.#...... ",
+"#........#........#........#",
+"######.##.########.##.######",
+"#............##............#",
+"#.####.#####.##.#####.####.#",
+"#.####.#####.##.#####.####.#",
+"......##....##....##......#",
+"######.##.########.##.######",
+"######.##.########.##.######",
+"#...........##...........#",
+"#.####.#####.##.#####.####.#",
+"#.####.#####.##.#####.####.#",
+"#P....##............##.....#",
+"######.##.########.##.######",
+"#............##............#",
+"############################"
+]
+
+Game variables
+pacman_pos = [1, 27]
+ghosts = [
+{"pos": [13, 15], "dir": [0, -1], "color": RED, "base_color": RED},
+{"pos": [14, 15], "dir": [0, -1], "color": PINK, "base_color": PINK},
+{"pos": [13, 16], "dir": [0, -1], "color": CYAN, "base_color": CYAN},
+{"pos": [14, 16], "dir": [0, -1], "color": ORANGE, "base_color": ORANGE}
+]
+dots = []
+super_pellets = []
+score = 0
+dots_eaten = 0
+lives = 4
+game_over = False
+game_won = False
+FPS = 60
+PACMAN_SPEED = 5
+GHOST_SPEED = 3
+frightened_mode = False
+frightened_timer = 0
+FRIGHTENED_DURATION = 5 * FPS
+animation_frame = 0
+animation_speed = 0.15
+move_direction = [0, 0]
+
+Sound effects
+def generate_waka_sound():
+sample_rate = 44100
+duration = 0.1
+freq = 440
+t = np.linspace(0, duration, int(sample_rate * duration), False)
+wave = 0.5 * np.sin(2 * np.pi * freq * t) * np.exp(-t * 10)
+stereo = np.array([wave, wave]).T
+return pygame.sndarray.make_sound((32767 * stereo).astype(np.int16))
+
+def generate_power_sound():
+sample_rate = 44100
+duration = 0.5
+t = np.linspace(0, duration, int(sample_rate * duration), False)
+wave = 0.5 * np.sin(2 * np.pi * 220 * t) * np.exp(-t * 5)
+stereo = np.array([wave, wave]).T
+return pygame.sndarray.make_sound((32767 * stereo).astype(np.int16))
+
+def generate_gameover_sound():
+sample_rate = 44100
+duration = 1.0
+t = np.linspace(0, duration, int(sample_rate * duration), False)
+wave = 0.5 * np.sin(2 * np.pi * 110 * t) * np.exp(-t * 2)
+stereo = np.array([wave, wave]).T
+return pygame.sndarray.make_sound((32767 * stereo).astype(np.int16))
+
+waka_sound = generate_waka_sound()
+power_sound = generate_power_sound()
+gameover_sound = generate_gameover_sound()
+
+Convert maze to list and collect dots and super pellets
+maze = [list(row) for row in maze]
+for y in range(MAZE_HEIGHT):
+for x in range(MAZE_WIDTH):
+if maze[y][x] == '.':
+dots.append([x, y])
+elif maze[y][x] == '*':
+super_pellets.append([x, y])
+
+total_dots = len(dots) + len(super_pellets)
+
+def draw_maze():
+screen.fill(BLACK)
+for y in range(MAZE_HEIGHT):
+for x in range(MAZE_WIDTH):
+if maze[y][x] == '#':
+pygame.draw.rect(screen, BLUE, (x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE))
+elif maze[y][x] == '.':
+pygame.draw.circle(screen, WHITE, (x * CELL_SIZE + CELL_SIZE // 2, y * CELL_SIZE + CELL_SIZE // 2), 3)
+elif maze[y][x] == '*':
+pygame.draw.circle(screen, WHITE, (x * CELL_SIZE + CELL_SIZE // 2, y * CELL_SIZE + CELL_SIZE // 2), 6)
+
+def draw_pacman():
+global animation_frame
+x, y = pacman_pos
+center = (x * CELL_SIZE + CELL_SIZE // 2, y * CELL_SIZE + CELL_SIZE // 2)
+radius = CELL_SIZE // 2
+mouth_angle = abs(math.sin(animation_frame)) * 45
+start_angle = 0
+if move_direction == [1, 0]:  # Right
+start_angle = mouth_angle
+elif move_direction == [-1, 0]:  # Left
+start_angle = 180 + mouth_angle
+elif move_direction == [0, -1]:  # Up
+start_angle = 90 + mouth_angle
+elif move_direction == [0, 1]:  # Down
+start_angle = 270 + mouth_angle
+end_angle = start_angle + 360 - 2 * mouth_angle
+pygame.draw.arc(screen, YELLOW, (x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE), math.radians(start_angle), math.radians(end_angle), radius)
+
+def draw_ghosts():
+for ghost in ghosts:
+x, y = ghost["pos"]
+color = BLUE_FRIGHTENED if frightened_mode else ghost["color"]
+body = pygame.Surface((CELL_SIZE, CELL_SIZE), pygame.SRCALPHA)
+points = [
+(4, 4), (CELL_SIZE-4, 4),
+(CELL_SIZE-4, CELL_SIZE-8), (CELL_SIZE-6, CELL_SIZE-4),
+(CELL_SIZE-10, CELL_SIZE-8), (CELL_SIZE-14, CELL_SIZE-4),
+(6, CELL_SIZE-8), (4, CELL_SIZE-4)
+]
+pygame.draw.polygon(body, color, points)
+eye_size = CELL_SIZE // 4
+pupil_size = eye_size // 2
+eye_offset_x = CELL_SIZE // 4
+eye_offset_y = CELL_SIZE // 3
+dir_x, dir_y = ghost["dir"]
+pupil_offset_x = dir_x * 2
+pupil_offset_y = dir_y * 2
+if frightened_mode:
+pupil_offset_x, pupil_offset_y = 0, 0
+pygame.draw.circle(body, WHITE, (eye_offset_x, eye_offset_y), eye_size)
+pygame.draw.circle(body, WHITE, (CELL_SIZE - eye_offset_x, eye_offset_y), eye_size)
+pygame.draw.circle(body, BLACK, (eye_offset_x + pupil_offset_x, eye_offset_y + pupil_offset_y), pupil_size)
+pygame.draw.circle(body, BLACK, (CELL_SIZE - eye_offset_x + pupil_offset_x, eye_offset_y + pupil_offset_y), pupil_size)
+screen.blit(body, (x * CELL_SIZE, y * CELL_SIZE))
+
+def draw_lives():
+for i in range(lives):
+x = 10 + i * (CELL_SIZE + 5)
+y = SCREEN_HEIGHT - CELL_SIZE - 10
+pygame.draw.arc(screen, YELLOW, (x, y, CELL_SIZE, CELL_SIZE), math.radians(45), math.radians(315), CELL_SIZE // 2)
+
+def can_move(pos, direction):
+new_x = int(pos[0] + direction[0])
+new_y = int(pos[1] + direction[1])
+if 0 <= new_x < MAZE_WIDTH and 0 <= new_y < MAZE_HEIGHT:
+return maze[new_y][new_x] != '#'
+return False
+
+def get_open_directions(pos):
+directions = [[0, -1], [0, 1], [-1, 0], [1, 0]]
+open_dirs = [dir for dir in directions if can_move(pos, dir)]
+return open_dirs
+
+def wrap_around(pos):
+x, y = pos
+if int(y) == 15:
+if x >= MAZE_WIDTH:
+x = 0
+elif x < 0:
+x = MAZE_WIDTH - 1
+return [x, y]
+
+def move_ghosts():
+for ghost in ghosts:
+current_dir = ghost["dir"]
+pos = ghost["pos"]
+open_dirs = get_open_directions(pos)
+if can_move(pos, current_dir) and not frightened_mode:
+ghost["pos"] = [pos[0] + current_dir[0] * GHOST_SPEED / FPS, pos[1] + current_dir[1] * GHOST_SPEED / FPS]
+elif frightened_mode:
+if random.random() < 0.02:
+if open_dirs:
+ghost["dir"] = random.choice(open_dirs)
+ghost["pos"] = [pos[0] + ghost["dir"][0] * GHOST_SPEED / FPS, pos[1] + ghost["dir"][1] * GHOST_SPEED / FPS]
+else:
+if open_dirs:
+ghost["dir"] = random.choice(open_dirs)
+ghost["pos"] = [pos[0] + ghost["dir"][0] * GHOST_SPEED / FPS, pos[1] + ghost["dir"][1] * GHOST_SPEED / FPS]
+ghost["pos"] = wrap_around(ghost["pos"])
+
+def check_collision():
+global lives, game_over, frightened_mode, score
+pacman_x, pacman_y = int(pacman_pos[0]), int(pacman_pos[1])
+for ghost in ghosts:
+ghost_x, ghost_y = int(ghost["pos"][0]), int(ghost["pos"][1])
+if abs(pacman_pos[0] - ghost["pos"][0]) < 0.5 and abs(pacman_pos[1] - ghost["pos"][1]) < 0.5:
+if frightened_mode:
+ghost["pos"] = [13 + random.choice([0, 1]), 15 + random.choice([0, 1])]
+ghost["color"] = ghost["base_color"]
+score += 200
+else:
+lives -= 1
+pacman_pos[0], pacman_pos[1] = 1, 27
+if lives <= 0:
+game_over = True
+gameover_sound.play()
+
+def eat_dots():
+global score, dots_eaten, game_won, frightened_mode, frightened_timer
+pacman_x, pacman_y = int(pacman_pos[0]), int(pacman_pos[1])
+if [pacman_x, pacman_y] in dots:
+dots.remove([pacman_x, pacman_y])
+maze[pacman_y][pacman_x] = ' '
+score += 10
+dots_eaten += 1
+waka_sound.play()
+elif [pacman_x, pacman_y] in super_pellets:
+super_pellets.remove([pacman_x, pacman_y])
+maze[pacman_y][pacman_x] = ' '
+score += 50
+dots_eaten += 1
+frightened_mode = True
+frightened_timer = FRIGHTENED_DURATION
+for ghost in ghosts:
+ghost["color"] = BLUE_FRIGHTENED
+power_sound.play()
+if len(dots) + len(super_pellets) == 0:
+game_won = True
+
+def setup():
+pass
+
+async def main():
+global pacman_pos, game_over, game_won, frightened_mode, frightened_timer, animation_frame, move_direction
+clock = pygame.time.Clock()
+
+setup()
+while not game_over and not game_won:
+for event in pygame.event.get():
+if event.type == pygame.QUIT:
+game_over = True
+elif event.type == pygame.KEYDOWN:
+if event.key == pygame.K_UP:
+move_direction = [0, -1]
+elif event.key == pygame.K_DOWN:
+move_direction = [0, 1]
+elif event.key == pygame.K_LEFT:
+move_direction = [-1, 0]
+elif event.key == pygame.K_RIGHT:
+move_direction = [1, 0]
+
+new_pos = [pacman_pos[0] + move_direction[0] * PACMAN_SPEED / FPS, pacman_pos[1] + move_direction[1] * PACMAN_SPEED / FPS]
+if can_move([int(new_pos[0]), int(new_pos[1])], [0, 0]):
+pacman_pos = new_pos
+pacman_pos = wrap_around(pacman_pos)
+
+move_ghosts()
+check_collision()
+eat_dots()
+if frightened_mode:
+frightened_timer -= 1
+if frightened_timer <= 0:
+frightened_mode = False
+for ghost in ghosts:
+ghost["color"] = ghost["base_color"]
+animation_frame += animation_speed
+
+draw_maze()
+draw_pacman()
+draw_ghosts()
+draw_lives()
+
+font = pygame.font.Font(None, 36)
+score_text = font.render(f"Score: {score}  Dots: {dots_eaten}/{total_dots}", True, WHITE)
+screen.blit(score_text, (10, 10))
+
+if game_over:
+text = font.render("Game Over! Press Q to Quit", True, WHITE)
+screen.blit(text, (SCREEN_WIDTH // 4, SCREEN_HEIGHT // 2))
+elif game_won:
+text = font.render("Victory! Press Q to Quit", True, WHITE)
+screen.blit(text, (SCREEN_WIDTH // 4, SCREEN_HEIGHT // 2))
+
+pygame.display.flip()
+clock.tick(FPS)
+await asyncio.sleep(1.0 / FPS)
+
+while game_over or game_won:
+for event in pygame.event.get():
+if event.type == pygame.KEYDOWN and event.key == pygame.K_q:
+pygame.quit()
+return
+await asyncio.sleep(1.0 / FPS)
+
+if platform.system() == "Emscripten":
+asyncio.ensure_future(main())
+else:
+if name == "main":
+asyncio.run(main())
+`);
+}
+main();
+</script>
